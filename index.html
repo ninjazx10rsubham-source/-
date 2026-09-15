@@ -76,10 +76,11 @@ const Shield = (p) => React.createElement(Icon, p, "🛡️");
 const STORAGE_KEY = "ppkp_database_v1";
 
 const defaultMembershipTypes = [
-  { id: "m1", নাম: "সাধারণ সদস্য", নির্ধারিতচাঁদা: 100, description: "সাধারণ পাড়ার সদস্য", active: true },
-  { id: "m2", নাম: "বিশেষ সদস্য", নির্ধারিতচাঁদা: 500, description: "বিশেষ অনুদানকারী সদস্য", active: true },
-  { id: "m3", নাম: "আজীবন সদস্য", নির্ধারিতচাঁদা: 1100, description: "আজীবন সদস্যপদ", active: true },
-  { id: "m4", নাম: "সহযোগী সদস্য", নির্ধারিতচাঁদা: 251, description: "সহযোগী হিসেবে যুক্ত সদস্য", active: true },
+  { id: "m1", নাম: "সক্রিয় সদস্য", নির্ধারিতচাঁদা: 0, description: "", active: true },
+  { id: "m2", নাম: "পাড়ার নাগরিক বৃন্দ", নির্ধারিতচাঁদা: 0, description: "", active: true },
+  { id: "m3", নাম: "বিশেষ সদস্য", নির্ধারিতচাঁদা: 0, description: "", active: true },
+  { id: "m4", নাম: "সহযোগী সদস্য", নির্ধারিতচাঁদা: 0, description: "", active: true },
+  { id: "m5", নাম: "ক্লাবের সদস্য", নির্ধারিতচাঁদা: 0, description: "", active: true },
 ];
 
 const defaultMarketCategories = [
@@ -115,7 +116,19 @@ const sampleExpenses = [
 function loadDB() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) return JSON.parse(raw);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      // পুরনো সদস্যপদের ধরন থাকলে নতুন নির্দিষ্ট তালিকায় migrate করুন।
+      const oldNames = ["সাধারণ সদস্য", "বিশেষ সদস্য", "আজীবন সদস্য", "সহযোগী সদস্য"];
+      if (Array.isArray(parsed.membershipTypes) && parsed.membershipTypes.length && parsed.membershipTypes.every(t => oldNames.includes(t.নাম))) {
+        parsed.membershipTypes = defaultMembershipTypes.map(t => ({ ...t }));
+        try { localStorage.setItem(STORAGE_KEY, JSON.stringify(parsed)); } catch {}
+      }
+      if (!Array.isArray(parsed.membershipTypes) || parsed.membershipTypes.length === 0) {
+        parsed.membershipTypes = defaultMembershipTypes.map(t => ({ ...t }));
+      }
+      return parsed;
+    }
   } catch (e) {
     console.error("DB লোড করতে সমস্যা:", e);
   }
@@ -168,7 +181,9 @@ function computeTotals(db) {
   const মোটখরচ = db.expenses.reduce((sum, e) => sum + (Number(e.পরিমাণ) || 0), 0);
   const অন্যান্যআয় = Number(db.otherIncome) || 0;
   const মোটআয় = মোটচাঁদা + অন্যান্যআয়;
-  const হাতেঅবশিষ্ট = মোটআয় - মোটখরচ;
+  // সর্বমোট খরচ = সাধারণ খরচ + বাজারের খরচ (বাজারও তো খরচ, তাই হাতে অবশিষ্ট হিসাব করার সময় এটাও বাদ দিতে হবে)
+  const সর্বমোটখরচ = মোটখরচ + মোটবাজার;
+  const হাতেঅবশিষ্ট = মোটআয় - সর্বমোটখরচ;
 
   const categoryWiseExpense = {};
   db.expenses.forEach((e) => {
@@ -180,6 +195,7 @@ function computeTotals(db) {
     মোটবকেয়া,
     মোটবাজার,
     মোটখরচ,
+    সর্বমোটখরচ,
     অন্যান্যআয়,
     মোটআয়,
     হাতেঅবশিষ্ট,
@@ -1620,23 +1636,28 @@ function SettingsPage() {
   const [passSuccess, setPassSuccess] = useState("");
 
   const addMembershipType = () => {
-    if (!newType.নাম.trim()) {
-      showToast("সদস্যপদের নাম আবশ্যক", "error");
+    const name = newType.নাম.trim();
+    if (!name) {
+      showToast("সদস্যের ধরন লিখুন", "error");
       return;
     }
     if (db.membershipTypes.length >= 30) {
-      showToast("সর্বোচ্চ ৩০টি সদস্যপদ তৈরি করা যাবে।", "error");
+      showToast("সর্বোচ্চ ৩০টি সদস্যের ধরন যোগ করা যাবে।", "error");
+      return;
+    }
+    if (db.membershipTypes.some(t => t.নাম.trim() === name)) {
+      showToast("এই সদস্যের ধরনটি আগে থেকেই আছে।", "error");
       return;
     }
     updateDB((d) => ({
       ...d,
       membershipTypes: [
-        ...d.membershipTypes,
-        { id: "m_" + Date.now(), নাম: newType.নাম, নির্ধারিতচাঁদা: Number(newType.নির্ধারিতচাঁদা) || 0, description: newType.description, active: true },
+        ...(Array.isArray(d.membershipTypes) ? d.membershipTypes : []),
+        { id: "m_" + Date.now(), নাম: name, নির্ধারিতচাঁদা: 0, description: "", active: true },
       ],
     }));
     setNewType({ নাম: "", নির্ধারিতচাঁদা: "", description: "" });
-    showToast("নতুন সদস্যপদ তৈরি হয়েছে।");
+    showToast("নতুন সদস্যের ধরন যোগ হয়েছে।");
   };
 
   const toggleType = (id) => {
@@ -1644,8 +1665,11 @@ function SettingsPage() {
   };
 
   const deleteType = (id) => {
-    updateDB((d) => ({ ...d, membershipTypes: d.membershipTypes.filter((t) => t.id !== id) }));
-    showToast("সদস্যপদ মুছে ফেলা হয়েছে।");
+    if (!id) return;
+    const target = db.membershipTypes.find(t => t.id === id);
+    if (!target) return;
+    updateDB((d) => ({ ...d, membershipTypes: (d.membershipTypes || []).filter((t) => t.id !== id) }));
+    showToast(`“${target.নাম}” মুছে ফেলা হয়েছে।`);
   };
 
   const handleExport = () => {
@@ -1718,7 +1742,7 @@ function SettingsPage() {
             <div key={t.id} className="flex items-center justify-between gap-3 bg-[#f6efd8] rounded-xl px-4 py-3">
               <div className="min-w-0">
                 <div className="font-medium text-[#3a1210]">{t.নাম}</div>
-                <div className="text-xs text-[#a17c46]">{formatTaka(t.নির্ধারিতচাঁদা)} {t.description && `· ${t.description}`}</div>
+                <div className="text-xs text-[#a17c46]">সদস্যের ধরন</div>
               </div>
               <div className="flex items-center gap-2 shrink-0">
                 <button
@@ -1740,13 +1764,6 @@ function SettingsPage() {
             onChange={(e) => setNewType((f) => ({ ...f, নাম: e.target.value }))}
             placeholder="নতুন সদস্যপদের নাম"
             className="flex-1 px-3.5 py-2.5 rounded-xl border border-[#e0cfa0] bg-white outline-none focus:border-[#7a1f2b] text-[#3a1210]"
-          />
-          <input
-            type="number"
-            value={newType.নির্ধারিতচাঁদা}
-            onChange={(e) => setNewType((f) => ({ ...f, নির্ধারিতচাঁদা: e.target.value }))}
-            placeholder="চাঁদা (₹)"
-            className="sm:w-32 px-3.5 py-2.5 rounded-xl border border-[#e0cfa0] bg-white outline-none focus:border-[#7a1f2b] text-[#3a1210]"
           />
           <PrimaryButton onClick={addMembershipType} icon={<Plus size={17} />}>
             যোগ করুন
