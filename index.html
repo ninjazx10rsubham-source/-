@@ -728,6 +728,8 @@ function MembersPage() {
   const [filter, setFilter] = useState("সবাই");
   const [modal, setModal] = useState(null); // {type, member}
   const [confirmDelete, setConfirmDelete] = useState(null);
+  const [pendingPayment, setPendingPayment] = useState(null);
+  const [paymentSuccess, setPaymentSuccess] = useState(null);
 
   const filtered = useMemo(() => {
     return db.members.filter((m) => {
@@ -766,13 +768,14 @@ function MembersPage() {
       তারিখ: "",
       মন্তব্য: form.মন্তব্য || "",
     };
-    updateDB((d) => ({ ...d, members: [...d.members, newMember] }));
-    showToast("নাগরিকের তথ্য সফলভাবে যুক্ত হয়েছে।");
+    const saved = updateDB((d) => ({ ...d, members: [...d.members, newMember] }), true);
+    if (!saved) return;
+    showToast("নাগরিক বৃন্দ ও চাঁদার তথ্য সফলভাবে যুক্ত হয়েছে।");
     setModal(null);
   };
 
   const handleEdit = (form) => {
-    updateDB((d) => ({
+    const saved = updateDB((d) => ({
       ...d,
       members: d.members.map((m) =>
         m.id === modal.member.id
@@ -788,31 +791,41 @@ function MembersPage() {
             }
           : m
       ),
-    }));
+    }), true);
+    if (!saved) return;
     showToast("সদস্যের তথ্য সফলভাবে হালনাগাদ হয়েছে।");
     setModal(null);
   };
 
   const handlePayment = (amount, date) => {
-    // টাকা জমা সাধারণ Dashboard থেকেও করা যাবে; Admin Mode বাধ্যতামূলক নয়।
-    setDb((prev) => {
-      const next = {
-        ...prev,
-        members: prev.members.map((m) => {
-          if (m.id !== modal.member.id) return m;
-          const newপaid = (Number(m.জমা) || 0) + Number(amount);
-          return { ...m, জমা: newপaid, তারিখ: date, status: deriveStatus(Number(m.নির্ধারিতচাঁদা) || 0, newপaid) };
-        }),
-      };
-      saveDB(next);
-      return next;
-    });
+    // প্রথমে নিশ্চিতকরণ দেখাবে; Admin Mode প্রয়োজন নেই।
+    setPendingPayment({ member: modal.member, amount: Number(amount), date });
+  };
+
+  const confirmPayment = () => {
+    if (!pendingPayment) return;
+    const { member, amount, date } = pendingPayment;
+    const saved = updateDB((d) => ({
+      ...d,
+      members: d.members.map((m) => {
+        if (m.id !== member.id) return m;
+        const newপaid = (Number(m.জমা) || 0) + amount;
+        return { ...m, জমা: newপaid, তারিখ: date, status: deriveStatus(Number(m.নির্ধারিতচাঁদা) || 0, newপaid) };
+      }),
+    }), true);
+    if (!saved) return;
+    const newTotal = (Number(member.জমা) || 0) + amount;
+    const dueAfter = Math.max((Number(member.নির্ধারিতচাঁদা) || 0) - newTotal, 0);
+    const statusAfter = deriveStatus(Number(member.নির্ধারিতচাঁদা) || 0, newTotal);
     showToast("টাকা সফলভাবে জমা হয়েছে।");
+    setPendingPayment(null);
     setModal(null);
+    setPaymentSuccess({ name: member.নাম, amount, total: newTotal, due: dueAfter, status: statusAfter, date });
   };
 
   const handleDelete = () => {
-    updateDB((d) => ({ ...d, members: d.members.filter((m) => m.id !== confirmDelete.id) }));
+    const saved = updateDB((d) => ({ ...d, members: d.members.filter((m) => m.id !== confirmDelete.id) }), true);
+    if (!saved) return;
     showToast("নাগরিকের তথ্য মুছে ফেলা হয়েছে।");
     setConfirmDelete(null);
   };
@@ -978,6 +991,41 @@ function MembersPage() {
           onCancel={() => setConfirmDelete(null)}
         />
       )}
+      {paymentSuccess && (
+        <Modal title="টাকা সফলভাবে জমা হয়েছে" onClose={() => setPaymentSuccess(null)}>
+          <div className="text-[#3a1210]">
+            <div className="text-center mb-5">
+              <div className="mx-auto mb-3 w-14 h-14 rounded-full bg-green-100 flex items-center justify-center text-green-700 text-3xl">✓</div>
+              <h3 className="text-xl font-bold">টাকা সফলভাবে জমা হয়েছে</h3>
+            </div>
+            <div className="rounded-xl bg-[#f6efd8] p-4 space-y-3">
+              <p><strong>সদস্য:</strong> {paymentSuccess.name}</p>
+              <p><strong>এইবার জমা:</strong> {formatTaka(paymentSuccess.amount)}</p>
+              <p><strong>মোট জমা:</strong> {formatTaka(paymentSuccess.total)}</p>
+              <p><strong>বাকি:</strong> {formatTaka(paymentSuccess.due)}</p>
+              <p><strong>স্ট্যাটাস:</strong> {paymentSuccess.status}</p>
+              <p><strong>তারিখ:</strong> {paymentSuccess.date}</p>
+            </div>
+            <div className="mt-5">
+              <PrimaryButton onClick={() => setPaymentSuccess(null)} full>ঠিক আছে</PrimaryButton>
+            </div>
+          </div>
+        </Modal>
+      )}
+      {pendingPayment && (
+        <Modal title="টাকা জমা নিশ্চিত করুন" onClose={() => setPendingPayment(null)}>
+          <div className="text-[#3a1210] leading-relaxed mb-6">
+            <p className="mb-2"><strong>{pendingPayment.member.নাম}</strong>-এর নামে</p>
+            <p className="text-xl font-bold">{formatTaka(pendingPayment.amount)}</p>
+            <p className="mt-2">তারিখ: {pendingPayment.date}</p>
+            <p className="mt-3">এই টাকা জমা নিশ্চিত করবেন?</p>
+          </div>
+          <div className="flex gap-3">
+            <PrimaryButton onClick={() => setPendingPayment(null)} variant="outline" full>বাতিল</PrimaryButton>
+            <PrimaryButton onClick={confirmPayment} icon={<Check size={17} />} full>জমা নিশ্চিত করুন</PrimaryButton>
+          </div>
+        </Modal>
+      )}
     </div>
   );
 }
@@ -1029,6 +1077,8 @@ function MarketPage() {
   const { db, updateDB, showToast } = useApp();
   const [modal, setModal] = useState(null);
   const [confirmDelete, setConfirmDelete] = useState(null);
+  const [pendingPayment, setPendingPayment] = useState(null);
+  const [paymentSuccess, setPaymentSuccess] = useState(null);
   const [search, setSearch] = useState("");
 
   const filtered = db.marketEntries.filter(
@@ -1184,6 +1234,8 @@ function ExpensesPage() {
   const expenseCategories = db.expenseCategories || EXPENSE_CATEGORIES;
   const [modal, setModal] = useState(null);
   const [confirmDelete, setConfirmDelete] = useState(null);
+  const [pendingPayment, setPendingPayment] = useState(null);
+  const [paymentSuccess, setPaymentSuccess] = useState(null);
 
   const handleAdd = (form) => {
     updateDB((d) => ({ ...d, expenses: [...d.expenses, { id: "ex_" + Date.now(), ...form, পরিমাণ: Number(form.পরিমাণ) }] }));
@@ -1823,8 +1875,8 @@ function App() {
     setToast({ message, type });
   }, []);
 
-  const updateDB = useCallback((updater) => {
-    if (!isAdmin) {
+  const updateDB = useCallback((updater, allowNormal = false) => {
+    if (!isAdmin && !allowNormal) {
       showToast("শুধুমাত্র অ্যাডমিন তথ্য পরিবর্তন করতে পারবেন।", "error");
       return false;
     }
