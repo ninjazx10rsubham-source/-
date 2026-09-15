@@ -181,9 +181,7 @@ function computeTotals(db) {
   const মোটখরচ = db.expenses.reduce((sum, e) => sum + (Number(e.পরিমাণ) || 0), 0);
   const অন্যান্যআয় = Number(db.otherIncome) || 0;
   const মোটআয় = মোটচাঁদা + অন্যান্যআয়;
-  // সর্বমোট খরচ = সাধারণ খরচ + বাজারের খরচ (বাজারও তো খরচ, তাই হাতে অবশিষ্ট হিসাব করার সময় এটাও বাদ দিতে হবে)
-  const সর্বমোটখরচ = মোটখরচ + মোটবাজার;
-  const হাতেঅবশিষ্ট = মোটআয় - সর্বমোটখরচ;
+  const হাতেঅবশিষ্ট = মোটআয় - মোটখরচ;
 
   const categoryWiseExpense = {};
   db.expenses.forEach((e) => {
@@ -195,7 +193,6 @@ function computeTotals(db) {
     মোটবকেয়া,
     মোটবাজার,
     মোটখরচ,
-    সর্বমোটখরচ,
     অন্যান্যআয়,
     মোটআয়,
     হাতেঅবশিষ্ট,
@@ -694,7 +691,7 @@ function MemberForm({ initial, membershipTypes, onSubmit, onCancel }) {
 function PaymentForm({ member, onSubmit, onCancel }) {
   const due = Math.max((Number(member.নির্ধারিতচাঁদা) || 0) - (Number(member.জমা) || 0), 0);
   const [amount, setAmount] = useState(String(due || ""));
-  const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
+  const [date, setDate] = useState(() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`; });
   const [error, setError] = useState("");
 
   const handleSubmit = () => {
@@ -797,15 +794,20 @@ function MembersPage() {
   };
 
   const handlePayment = (amount, date) => {
-    updateDB((d) => ({
-      ...d,
-      members: d.members.map((m) => {
-        if (m.id !== modal.member.id) return m;
-        const newপaid = (Number(m.জমা) || 0) + amount;
-        return { ...m, জমা: newপaid, তারিখ: date, status: deriveStatus(m.নির্ধারিতচাঁদা, newপaid) };
-      }),
-    }));
-    showToast("চাঁদা সফলভাবে সংরক্ষিত হয়েছে।");
+    // টাকা জমা সাধারণ Dashboard থেকেও করা যাবে; Admin Mode বাধ্যতামূলক নয়।
+    setDb((prev) => {
+      const next = {
+        ...prev,
+        members: prev.members.map((m) => {
+          if (m.id !== modal.member.id) return m;
+          const newপaid = (Number(m.জমা) || 0) + Number(amount);
+          return { ...m, জমা: newপaid, তারিখ: date, status: deriveStatus(Number(m.নির্ধারিতচাঁদা) || 0, newপaid) };
+        }),
+      };
+      saveDB(next);
+      return next;
+    });
+    showToast("টাকা সফলভাবে জমা হয়েছে।");
     setModal(null);
   };
 
@@ -1824,13 +1826,14 @@ function App() {
   const updateDB = useCallback((updater) => {
     if (!isAdmin) {
       showToast("শুধুমাত্র অ্যাডমিন তথ্য পরিবর্তন করতে পারবেন।", "error");
-      return;
+      return false;
     }
     setDb((prev) => {
       const next = typeof updater === "function" ? updater(prev) : updater;
       saveDB(next);
       return next;
     });
+    return true;
   }, [isAdmin, showToast]);
 
   useEffect(() => {
